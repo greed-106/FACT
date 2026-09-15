@@ -139,11 +139,11 @@ Per-episode results land in RoboTwin's `eval_result/`; the sweep also writes per
 If you find FACT useful, please consider citing:
 
 ```bibtex
-@article{peng2026fact,
-  title   = {FACT: Failure-Aware Causal Training for World-Action Models},
-  author  = {Peng, Quanquan and Liang, Yutong and Yan, Rui and Hansen, Nicklas and Wang, Xiaolong},
-  journal = {arXiv preprint},
-  year    = {2026}
+@inproceedings{peng2026fact,
+  title     = {FACT: Failure-Aware Causal Training for World-Action Models},
+  author    = {Peng, Quanquan and Liang, Yutong and Yan, Rui and Hansen, Nicklas and Wang, Xiaolong},
+  booktitle = {Conference on Robot Learning (CoRL)},
+  year      = {2026}
 }
 ```
 
