@@ -2,15 +2,16 @@
 # Precedence: shell env vars > this YAML > script defaults.
 
 server:
-  FACT_CONDA_ENV: fact
+  # FACT's single uv project supplies both WAM and RoboTwin simulator packages.
+  FACT_UV_PROJECT: ${REPO_ROOT}
   SERVER_HOST: 127.0.0.1
   PORT: 8093
-  MODEL_ID: ${REPO_ROOT}/models/Wan2.2-TI2V-5B-Diffusers
+  MODEL_ID: /data/shared/FACT/models/Wan2.2-TI2V-5B-Diffusers
   # Released checkpoint. For your own run:
   #   ${REPO_ROOT}/experiments/robotwin/models/<checkpoint>/transformer
   #   ${REPO_ROOT}/artifacts/robotwin/norm_stats_delta.json
-  TRANSFORMER_PATH: ${REPO_ROOT}/models/fact-wam/transformer
-  STATS_PATH: ${REPO_ROOT}/models/fact-wam/norm_stats_delta.json
+  TRANSFORMER_PATH: /data/shared/FACT/models/fact-wam/transformer
+  STATS_PATH: /data/shared/FACT/models/fact-wam/norm_stats_delta.json
   # Fallback T5 embedding, used only when the client sends no instruction text.
   T5_EMBEDDING_PKL: ""
   DEVICE: cuda:0
@@ -32,21 +33,23 @@ server:
   SKIP_FUTURE_STATE_VALUE: "0"
 
 client:
-  ROBOTWIN_PATH: /your/path/to/RoboTwin
+  # RoboTwin-Phys checkout. Its native evaluator is scripts/eval_policy.py.
+  ROBOTWIN_PATH: /data/mjyang/code/RoboTwin_Phys
+  EVAL_POLICY_SCRIPT: scripts/eval_policy.py
   DEPLOY_POLICY_PATH: ${REPO_ROOT}/evaluation/robotwin/deploy_policy.yml
-  # Conda env name or env path; the launcher uses its `bin/python` directly.
-  ROBOTWIN_CONDA_ENV: RoboTwin
-  # Set to override the interpreter derived from ROBOTWIN_CONDA_ENV.
-  CLIENT_PYTHON: ""
-  # Optional, machine-specific: GPU compute capability (8.0 A100, 8.9 RTX 40xx,
-  # 9.0 H100, 12.0 Blackwell) and extra lib paths, e.g. "/usr/lib64:/usr/lib".
-  TORCH_CUDA_ARCH_LIST: ""
+  # Current machine: CUDA 12.8 and H100 (compute 9.0). Override these on a
+  # different host; CuRobo uses them when it builds CUDA extensions.
+  CUDA_HOME: /usr/local/cuda-12.8
+  TORCH_CUDA_ARCH_LIST: "9.0"
   EXTRA_LD_LIBRARY_PATH: ""
   TASK_NAME: beat_block_hammer
-  TASK_CONFIG: demo_clean
+  # `phys_random_all` automatically routes the nine special tasks to their
+  # per-task PhysTTT configs inside RoboTwin-Phys.
+  TASK_CONFIG: phys_random_all
   # The first env seed is `100000 * (1 + SEED)`.
   SEED: 0
-  # Number of *valid* evaluation episodes (seeds failing the expert check are retried).
+  # Number of evaluation slots passed to RoboTwin-Phys as --eval_num_episodes.
+  # Expert-infeasible slots are included in that benchmark's reported denominator.
   TEST_NUM: 50
   # Must match the server PORT above.
   PORT: 8093

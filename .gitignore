@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 build/
+/.venv/
 
 # data / models / run outputs at the repo root (never commit these).
 # Anchored with a leading slash so they cannot match source dirs like

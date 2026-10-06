@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sweep every RoboTwin task and collect per-task + average success rate.
+# Sweep every RoboTwin-Phys task and collect per-task + average success rate.
 # Requires a running FACT server (see launch_server.sh).
 #
 #   bash evaluation/robotwin/eval_all_tasks.sh [task_config] [test_num]
@@ -11,24 +11,29 @@ set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 LAUNCH_CONFIG_PATH=${ROBOTWIN_LAUNCH_CONFIG:-${SCRIPT_DIR}/launch_config.yml}
-export SCRIPT_DIR REPO_ROOT
+FACT_UV_PROJECT=${FACT_UV_PROJECT:-${REPO_ROOT}}
+export SCRIPT_DIR REPO_ROOT FACT_UV_PROJECT
 
 # shellcheck source=evaluation/robotwin/common.sh
 source "${SCRIPT_DIR}/common.sh"
 load_launch_config client
 
-task_config=${1:-${TASK_CONFIG:-demo_clean}}
+task_config=${1:-${TASK_CONFIG:-phys_random_all}}
 test_num=${2:-${TEST_NUM:-50}}
 ROBOTWIN_PATH=${ROBOTWIN_PATH:-${HOME}/RoboTwin}
 policy_name=${POLICY_NAME:-evaluation.robotwin.model2robotwin_interface}
-ckpt_setting=fact   # must match `ckpt_setting` in deploy_policy.yml
 
-# Canonical evaluable-task list: the 50 tasks RoboTwin defines a step limit for.
+# Canonical evaluable-task list: the 50 tasks RoboTwin-Phys defines a step limit for.
 # Resolved before SWEEP_OUT so a misconfigured run leaves no empty eval_runs/.
 if [[ -n "${TASK_LIST:-}" ]]; then
   read -r -a tasks <<< "${TASK_LIST}"
 else
-  step_limit_yml="${ROBOTWIN_PATH}/task_config/_eval_step_limit.yml"
+  step_limit_yml="${ROBOTWIN_PATH}/env_cfg/task_config/_eval_step_limit.yml"
+  # The original RoboTwin layout used task_config/ directly. Keeping this
+  # fallback makes an explicit legacy checkout usable with the sweep helper.
+  if [[ ! -f "${step_limit_yml}" ]]; then
+    step_limit_yml="${ROBOTWIN_PATH}/task_config/_eval_step_limit.yml"
+  fi
   if [[ ! -f "${step_limit_yml}" ]]; then
     echo "Error: no task list at '${step_limit_yml}'. Set ROBOTWIN_PATH in" >&2
     echo "       ${LAUNCH_CONFIG_PATH} (or as an env var), or pass TASK_LIST=\"task_a task_b\"." >&2
@@ -64,27 +69,36 @@ for task in "${tasks[@]}"; do
     > "${SWEEP_OUT}/logs/${task}.log" 2>&1
   client_rc=$?
 
-  # eval_policy.py writes eval_result/<task>/<policy>/<config>/<ckpt_setting>/<timestamp>/_result.txt
-  # Only accept a _result.txt written by THIS run (mtime >= task_start) with a
-  # zero client exit code — otherwise a failed task would silently pick up the
-  # newest result from a previous sweep.
-  result_dir="${ROBOTWIN_PATH}/eval_result/${task}/${policy_name}/${task_config}/${ckpt_setting}"
-  latest=$(ls -1dt "${result_dir}"/*/ 2>/dev/null | head -1)
+  # RoboTwin-Phys writes _result_{clean,random}.txt. For phys_random_all, nine
+  # tasks are auto-routed to per-task config directories, so search beneath the
+  # policy result root instead of assuming the requested config directory.
+  # Only accept a result written by THIS run with a zero client exit code.
+  result_root="${ROBOTWIN_PATH}/eval_result/${task}/${policy_name}"
+  latest_result=""
+  if [[ -d "${result_root}" ]]; then
+    latest_result=$(find "${result_root}" -type f -name '_result*.txt' -printf '%T@ %p\n' 2>/dev/null \
+      | sort -nr | head -n1 | cut -d' ' -f2-)
+  fi
   rate=""
-  if [[ ${client_rc} -eq 0 && -n "${latest}" && -f "${latest}/_result.txt" ]] \
-     && [[ $(stat -c %Y "${latest}/_result.txt") -ge ${task_start} ]]; then
-    rate=$(tail -n1 "${latest}/_result.txt")
+  attempts="${test_num}"
+  if [[ ${client_rc} -eq 0 && -n "${latest_result}" && -f "${latest_result}" ]] \
+     && [[ $(stat -c %Y "${latest_result}") -ge ${task_start} ]]; then
+    rate=$(tail -n1 "${latest_result}" | tr -d '[:space:]')
+    parsed_attempts=$(awk -F': ' '/^Attempts \(rollouts \+ expert-infeasible\):/ {print $2; exit}' "${latest_result}")
+    if [[ "${parsed_attempts}" =~ ^[0-9]+$ ]] && [[ ${parsed_attempts} -gt 0 ]]; then
+      attempts="${parsed_attempts}"
+    fi
   fi
 
-  if [[ -z "${rate}" ]]; then
-    echo "[fail] ${task}: client rc=${client_rc}, no fresh _result.txt — see ${SWEEP_OUT}/logs/${task}.log"
+  if [[ ! "${rate}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "[fail] ${task}: client rc=${client_rc}, no fresh valid result — see ${SWEEP_OUT}/logs/${task}.log"
     echo "${task},,,ERROR" >> "${CSV}"
     continue
   fi
 
-  succ=$(awk -v r="${rate}" -v n="${test_num}" 'BEGIN{printf "%d", r*n+0.5}')
-  echo "${task},${succ},${test_num},${rate}" >> "${CSV}"
-  echo "[done] ${task}: ${succ}/${test_num} = ${rate}"
+  succ=$(awk -v r="${rate}" -v n="${attempts}" 'BEGIN{printf "%d", r*n+0.5}')
+  echo "${task},${succ},${attempts},${rate}" >> "${CSV}"
+  echo "[done] ${task}: ${succ}/${attempts} = ${rate}"
 done
 
 echo

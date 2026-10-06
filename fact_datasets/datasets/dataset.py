@@ -146,7 +146,7 @@ def load_dataset(data_or_config: Any) -> BaseDataset:
     if class_name not in DATASETS:
         hint = ''
         if class_name == 'LeRobotDataset':
-            hint = " It is only registered when the optional `lerobot` package is importable; install it with `pip install --no-deps lerobot==0.3.2`."
+            hint = " It is only registered when the optional `lerobot` package is importable; run `uv sync` to install FACT's locked dependencies."
         raise KeyError(
             f'Dataset {class_name!r} is not registered (known: {sorted(DATASETS)}).{hint}'
         )

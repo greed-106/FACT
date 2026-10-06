@@ -1,60 +1,39 @@
 # Shared helpers for launch_server.sh / launch_client.sh.
-# Expects SCRIPT_DIR and LAUNCH_CONFIG_PATH to be set by the caller.
+# Expects SCRIPT_DIR, REPO_ROOT, and LAUNCH_CONFIG_PATH to be set by the caller.
 
-# Resolve a conda env name or env path to its bin/python.
-resolve_env_python() {
-  local env_spec="$1"
-  local conda_base
-  local prefix=""
+require_uv_project() {
+  local project_path="$1"
+  local project_name="$2"
 
-  if [[ -z "${env_spec}" ]]; then
-    command -v python
-    return 0
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "Error: uv is required to run ${project_name}." >&2
+    exit 1
   fi
-
-  if [[ -x "${env_spec}/bin/python" ]]; then
-    printf '%s\n' "${env_spec}/bin/python"
-    return 0
+  if [[ ! -f "${project_path}/pyproject.toml" ]]; then
+    echo "Error: ${project_name} uv project not found at '${project_path}'." >&2
+    echo "       Set the corresponding *_UV_PROJECT variable to a checkout containing pyproject.toml." >&2
+    exit 1
   fi
-
-  conda_base=$(conda info --base)
-
-  prefix=$(conda env list | awk -v name="${env_spec}" 'NR > 2 && $1 == name {print $NF; exit}')
-  if [[ -n "${prefix}" && -x "${prefix}/bin/python" ]]; then
-    printf '%s\n' "${prefix}/bin/python"
-    return 0
-  fi
-
-  if [[ -x "${conda_base}/envs/${env_spec}/bin/python" ]]; then
-    printf '%s\n' "${conda_base}/envs/${env_spec}/bin/python"
-    return 0
-  fi
-
-  echo "Error: env '${env_spec}' was not found as a Conda env name or path with bin/python." >&2
-  return 1
 }
 
 # Export the given launch_config.yml section as shell variables (explicit
-# environment variables keep precedence). Fails loudly rather than skipping the
-# config, which would run the whole evaluation with default settings.
+# environment variables keep precedence). Parsing always uses FACT's own uv
+# project; it never imports RoboTwin-Phys packages into the FACT environment.
 load_launch_config() {
   if [[ ! -f "${LAUNCH_CONFIG_PATH}" ]]; then
     return 0
   fi
 
-  local python_bin exports
-  python_bin=$(resolve_env_python "${FACT_CONDA_ENV:-}" 2>/dev/null) || python_bin=""
-  if [[ -z "${python_bin}" ]]; then
-    echo "Error: no python interpreter found to read ${LAUNCH_CONFIG_PATH}." >&2
-    echo "       Activate the fact env, or export FACT_CONDA_ENV." >&2
-    exit 1
-  fi
+  local fact_project exports
+  fact_project="${FACT_UV_PROJECT:-${REPO_ROOT}}"
+  require_uv_project "${fact_project}" "FACT"
 
   # `if !` so `set -e` cannot kill the shell before the error prints.
-  if ! exports=$("${python_bin}" "${SCRIPT_DIR}/resolve_launch_config.py" \
+  if ! exports=$(uv run --project "${fact_project}" --no-sync python \
+      "${SCRIPT_DIR}/resolve_launch_config.py" \
       --config "${LAUNCH_CONFIG_PATH}" --section "$1"); then
-    echo "Error: could not read ${LAUNCH_CONFIG_PATH} using ${python_bin}." >&2
-    echo "       It needs PyYAML; export FACT_CONDA_ENV to pick another interpreter." >&2
+    echo "Error: could not read ${LAUNCH_CONFIG_PATH} using FACT's uv environment." >&2
+    echo "       Run 'uv sync --locked' in ${fact_project} first." >&2
     exit 1
   fi
 

@@ -35,17 +35,26 @@ This repository is the official implementation, containing the end-to-end RoboTw
 | --- | --- |
 | `world_action_model/` | Model, trainer, inference pipeline, transforms, config (`configs/robotwin.py`) |
 | `fact_train/`, `fact_datasets/` | Training harness and dataset library |
-| `scripts/` | CLI entrypoints, run as `python -m scripts.<name>` from the repo root |
+| `scripts/` | CLI entrypoints, run as `uv run --no-sync python -m scripts.<name>` from the repo root |
 | `evaluation/robotwin/` | Closed-loop simulator evaluation |
 
 ## 🛠️ Installation
 
 ```bash
-bash setup_env.sh        # conda env `fact`, pinned deps, Wan2.2 + RoboTwin download
-conda activate fact
+bash setup_env.sh        # locked uv environment, model weights in /data/shared/FACT, RoboTwin download
 ```
 
 Already have the checkpoint or dataset: `SKIP_MODEL_DOWNLOAD=1 SKIP_DATA_DOWNLOAD=1 bash setup_env.sh`
+
+The script creates `FACT/.venv`; no Conda activation is needed. It stores the
+Wan2.2 base model and FACT checkpoint under `/data/shared/FACT/models` by
+default; override that root with `FACT_SHARED_ROOT`. Run subsequent commands
+as `uv run --no-sync …`.
+
+For Wan2.2, `setup_env.sh` uses `https://hf-mirror.com` and downloads every
+large shard with 32 concurrent HTTP Range requests, checking its SHA-256 before
+accepting it. Set `HF_PARALLEL_DOWNLOAD_WORKERS` to tune the connection count
+or `HF_ENDPOINT` to use another Hugging Face endpoint.
 
 ## 📦 Model & Data Download
 
@@ -53,11 +62,11 @@ Equivalent of what `setup_env.sh` does:
 
 ```bash
 # Wan2.2 base model
-huggingface-cli download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
+uv run --no-sync huggingface-cli download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --local-dir ./models/Wan2.2-TI2V-5B-Diffusers
 
 # RoboTwin demonstrations
-huggingface-cli download Bariona/robotwin-v2 robotwin-v2.tar \
+uv run --no-sync huggingface-cli download Bariona/robotwin-v2 robotwin-v2.tar \
   --repo-type dataset --local-dir ./datasets
 tar -xf ./datasets/robotwin-v2.tar -C ./datasets   # -> datasets/RoboTwin/{Clean,Randomized}/<task>/
 ```
@@ -65,7 +74,7 @@ tar -xf ./datasets/robotwin-v2.tar -C ./datasets   # -> datasets/RoboTwin/{Clean
 Trained FACT checkpoint ([`Bariona/fact-wam`](https://huggingface.co/Bariona/fact-wam)):
 
 ```bash
-huggingface-cli download Bariona/fact-wam --local-dir ./models/fact-wam
+uv run --no-sync huggingface-cli download Bariona/fact-wam --local-dir ./models/fact-wam
 ```
 
 ## 📊 Data Preprocessing
@@ -73,7 +82,7 @@ huggingface-cli download Bariona/fact-wam --local-dir ./models/fact-wam
 **1. Norm stats + per-episode T5 embedding caches** (required; subset via `--dataset_glob 'Clean/*'`):
 
 ```bash
-python -m scripts.prepare_robotwin \
+uv run --no-sync python -m scripts.prepare_robotwin \
   --robotwin_root ./datasets/RoboTwin \
   --wan_model_path ./models/Wan2.2-TI2V-5B-Diffusers \
   --output_dir ./artifacts/robotwin
@@ -82,13 +91,13 @@ python -m scripts.prepare_robotwin \
 **2. VAE latent cache** — training reads it by default; export `FACT_USE_CACHED_VAE_LATENTS=0` to train from raw video instead:
 
 ```bash
-python -m scripts.compute_vae_latents --batch_size 32   # match training BATCH_SIZE_PER_GPU
+uv run --no-sync python -m scripts.compute_vae_latents --batch_size 32   # match training BATCH_SIZE_PER_GPU
 ```
 
 **3. Dataloader check** (optional):
 
 ```bash
-python -m scripts.test_dataloader --config world_action_model.configs.robotwin \
+uv run --no-sync python -m scripts.test_dataloader --config world_action_model.configs.robotwin \
   --num_workers 0 --batch_size 2 --num_batches 2
 ```
 
@@ -97,7 +106,7 @@ python -m scripts.test_dataloader --config world_action_model.configs.robotwin \
 Edit the USER SETTINGS block at the top of `world_action_model/configs/robotwin.py`, then:
 
 ```bash
-python -m scripts.train --config world_action_model.configs.robotwin.config
+uv run --no-sync python -m scripts.train --config world_action_model.configs.robotwin.config
 ```
 
 ## ⚡ Inference
@@ -105,7 +114,7 @@ python -m scripts.train --config world_action_model.configs.robotwin.config
 Serve a trained checkpoint (to use the released one instead, pass `--transformer_path ./models/fact-wam/transformer --stats_path ./models/fact-wam/norm_stats_delta.json`):
 
 ```bash
-python -m scripts.inference_server \
+uv run --no-sync python -m scripts.inference_server \
   --model_id ./models/Wan2.2-TI2V-5B-Diffusers \
   --transformer_path ./experiments/robotwin/models/<checkpoint>/transformer \
   --stats_path ./artifacts/robotwin/norm_stats_delta.json \
@@ -123,16 +132,28 @@ Useful flags:
 
 ## 🤖 RoboTwin Evaluation
 
-Set up the simulator in its own conda env following [RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin/tree/2eeec322d95799f537cbfe5f291a8220d965ccb8), then apply `git -C <robotwin> apply <fact>/evaluation/robotwin/robotwin_test_num.patch` so `TEST_NUM` takes effect (upstream hardcodes 100 episodes).
+The evaluation launchers target [RoboTwin-Phys](https://github.com/yefeng00/RoboTwin_Phys) and invoke its native `scripts/eval_policy.py` directly. Both the FACT server and the RoboTwin client run in FACT's `.venv`; RoboTwin-Phys is used only as a source and asset checkout. FACT's lockfile includes the simulator packages and aligns the shared simulator/GPU versions with RoboTwin-Phys. WAM-only packages such as Diffusers, Transformers, and Hugging Face Hub keep FACT's compatible versions. RoboTwin-Phys's existing uv environment and lockfile are never read, synchronized, or modified. `TEST_NUM` is passed to RoboTwin-Phys as `--eval_num_episodes`; no patch to the benchmark is needed.
 
 ```bash
-# settings live in evaluation/robotwin/launch_config.yml; point ROBOTWIN_PATH at your checkout
+# settings live in evaluation/robotwin/launch_config.yml
 bash evaluation/robotwin/launch_server.sh                                # terminal 1
-bash evaluation/robotwin/launch_client.sh beat_block_hammer demo_clean   # terminal 2
-bash evaluation/robotwin/eval_all_tasks.sh demo_clean 50                 # ... or sweep all 50 tasks
+bash evaluation/robotwin/launch_client.sh beat_block_hammer phys_random_all  # terminal 2
+bash evaluation/robotwin/eval_all_tasks.sh phys_random_all 50                # ... or sweep all 50 tasks
 ```
 
-Per-episode results land in RoboTwin's `eval_result/`; the sweep also writes per-task and average success rates to `./eval_runs/<config>_<timestamp>/`.
+`phys_random_all` lets RoboTwin-Phys automatically select its nine task-specific PhysTTT configurations. Per-episode results land in RoboTwin-Phys's `eval_result/`; the sweep writes per-task and average success rates to `./eval_runs/<config>_<timestamp>/`. Its CSV uses RoboTwin-Phys's actual attempt count, which includes expert-infeasible evaluation slots.
+
+For dynamic multi-GPU scheduling, use the SQLite-backed launcher below instead of starting `launch_server.sh` yourself. An idle worker immediately claims the next task. By default it starts one persistent FACT inference server and one sequential RoboTwin-Phys worker per GPU; `--workers-per-gpu` creates independent concurrent server/client slots on each selected GPU. It writes `scheduler.sqlite3`, worker/client logs, `results.csv`, and `summary.json` below the specified new output directory.
+
+```bash
+uv run --no-sync python -m evaluation.robotwin.eval_all_tasks_multi_gpu \
+  --gpu-ids 0,1,2,3 \
+  --task-config phys_random_all \
+  --test-num 100 \
+  --output-dir ./eval_runs/phys_random_all_100_multi_gpu
+```
+
+All selected GPUs must have room for the requested number of FACT server and RoboTwin-Phys simulator slots. For example, add `--workers-per-gpu 2` for two concurrent task rollouts per GPU. The launcher assigns one consecutive port per slot starting at `18093`; change `--base-port` if that range is occupied. Run `--dry-run` with the same arguments to create and inspect the 50-job SQLite queue without launching servers.
 
 ## 📝 Citation
 

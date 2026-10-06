@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 LAUNCH_CONFIG_PATH=${ROBOTWIN_LAUNCH_CONFIG:-${SCRIPT_DIR}/launch_config.yml}
+FACT_UV_PROJECT=${FACT_UV_PROJECT:-${REPO_ROOT}}
 
-export SCRIPT_DIR REPO_ROOT
+export SCRIPT_DIR REPO_ROOT FACT_UV_PROJECT
 
 # shellcheck source=evaluation/robotwin/common.sh
 source "${SCRIPT_DIR}/common.sh"
@@ -13,9 +14,10 @@ source "${SCRIPT_DIR}/common.sh"
 load_launch_config client
 
 ROBOTWIN_PATH=${ROBOTWIN_PATH:-${HOME}/RoboTwin}
+EVAL_POLICY_SCRIPT=${EVAL_POLICY_SCRIPT:-scripts/eval_policy.py}
+EVAL_POLICY_WRAPPER=${EVAL_POLICY_WRAPPER:-${SCRIPT_DIR}/run_eval_policy.py}
 DEPLOY_POLICY_PATH=${DEPLOY_POLICY_PATH:-${REPO_ROOT}/evaluation/robotwin/deploy_policy.yml}
-ROBOTWIN_CONDA_ENV=${ROBOTWIN_CONDA_ENV:-}
-CLIENT_PYTHON=${CLIENT_PYTHON:-}
+FACT_UV_PROJECT=${FACT_UV_PROJECT:-${REPO_ROOT}}
 # Machine-specific, off by default; set in launch_config.yml if needed.
 if [[ -n "${EXTRA_LD_LIBRARY_PATH:-}" ]]; then
   export LD_LIBRARY_PATH="${EXTRA_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH:-}"
@@ -23,9 +25,12 @@ fi
 if [[ -n "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
   export TORCH_CUDA_ARCH_LIST
 fi
+if [[ -n "${CUDA_HOME:-}" ]]; then
+  export CUDA_HOME
+fi
 
 task_name=${1:-${TASK_NAME:-beat_block_hammer}}
-task_config=${2:-${TASK_CONFIG:-demo_clean}}
+task_config=${2:-${TASK_CONFIG:-phys_random_all}}
 ckpt_setting=${3:-}
 seed=${4:-${SEED:-0}}
 test_num=${TEST_NUM:-1}
@@ -51,21 +56,17 @@ fi
 
 export PYTHONPATH="${REPO_ROOT}:${ROBOTWIN_PATH}:${PYTHONPATH:-}"
 
-if [[ ! -f "${ROBOTWIN_PATH}/script/eval_policy.py" ]]; then
+if [[ ! -f "${ROBOTWIN_PATH}/${EVAL_POLICY_SCRIPT}" ]]; then
   echo "Error: no RoboTwin checkout at '${ROBOTWIN_PATH}'. Set ROBOTWIN_PATH in" >&2
   echo "       ${LAUNCH_CONFIG_PATH} or as an environment variable." >&2
+  echo "       Expected evaluator: ${ROBOTWIN_PATH}/${EVAL_POLICY_SCRIPT}" >&2
   exit 1
 fi
 
-if [[ -z "${CLIENT_PYTHON}" ]]; then
-  CLIENT_PYTHON=$(resolve_env_python "${ROBOTWIN_CONDA_ENV}")
-fi
-
-CLIENT_BIN_DIR=$(cd "$(dirname "${CLIENT_PYTHON}")" && pwd)
-export PATH="${CLIENT_BIN_DIR}:${PATH}"
+require_uv_project "${FACT_UV_PROJECT}" "FACT"
 
 cmd=(
-  "${CLIENT_PYTHON}" script/eval_policy.py
+  uv run --project "${FACT_UV_PROJECT}" --no-sync python "${EVAL_POLICY_WRAPPER}" "${ROBOTWIN_PATH}/${EVAL_POLICY_SCRIPT}"
   --config "${DEPLOY_POLICY_PATH}"
   --overrides
   --task_name "${task_name}"
@@ -73,7 +74,7 @@ cmd=(
   --seed "${seed}"
   --policy_name "${policy_name}"
   --port "${port}"
-  --test_num "${test_num}"
+  --eval_num_episodes "${test_num}"
 )
 
 if [[ -n "${ckpt_setting}" ]]; then
@@ -118,8 +119,8 @@ if [[ -n "${skip_action_render_sync}" ]]; then
 fi
 
 cd "${ROBOTWIN_PATH}"
-echo "Running RoboTwin eval_policy.py for task=${task_name}, test_num=${test_num}, port=${port}"
-echo "Python: ${CLIENT_PYTHON}"
+echo "Running RoboTwin-Phys ${EVAL_POLICY_SCRIPT} for task=${task_name}, eval_num_episodes=${test_num}, port=${port}"
+echo "uv project: ${FACT_UV_PROJECT}"
 echo "Launch config: ${LAUNCH_CONFIG_PATH}"
 if [[ -n "${eval_video_log}" ]]; then
   export FACT_ROBOTWIN_EVAL_VIDEO_LOG="${eval_video_log}"
